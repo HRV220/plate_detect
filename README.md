@@ -29,10 +29,8 @@
     Откройте терминал и выполните следующую команду, чтобы скачать проект на ваш компьютер.
 
     ```bash
-    git clone https://github.com/your-username/your-repository-name.git
+    git clone https://github.com/HRV220/plate_detect.git
     ```
-
-    _(Не забудьте заменить `your-username/your-repository-name.git` на реальный URL вашего репозитория)_
 
 2.  **Перейдите в директорию сервиса:**
     Весь код, необходимый для запуска, находится в папке `server/`.
