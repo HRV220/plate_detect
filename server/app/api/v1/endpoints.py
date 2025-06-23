@@ -13,6 +13,7 @@ from fastapi import (
 
 from app.api.v1 import schemas
 from app.services import task_manager
+from app.core.config import settings # <--- Импортируем наши настройки
 
 # Создаем логгер для этого модуля
 logger = logging.getLogger(__name__)
@@ -43,8 +44,32 @@ async def create_task(
     client_host = request.client.host
     logger.info(f"Получен запрос на создание задачи от {client_host} с {len(files)} файлами.")
 
-    # Эта проверка остается здесь, так как это специфическая бизнес-логика,
-    # а не непредвиденное исключение. Мы явно сообщаем клиенту, что сервис временно недоступен.
+    # --- НАЧАЛО БЛОКА ВАЛИДАЦИИ ВХОДНЫХ ДАННЫХ ---
+
+    # 1. Проверка общего количества файлов в запросе
+    if len(files) > settings.MAX_FILES_PER_REQUEST:
+        msg = f"Превышен лимит на количество файлов в запросе ({len(files)} > {settings.MAX_FILES_PER_REQUEST})."
+        logger.warning(f"{msg} (Клиент: {client_host})")
+        raise HTTPException(status_code=413, detail=msg) # 413 Payload Too Large
+
+    # 2. Проверка каждого файла индивидуально (размер и MIME-тип)
+    for file in files:
+        # Проверка размера файла. file.size доступен после того, как файл начал читаться.
+        # FastAPI достаточно умен, чтобы предоставить этот атрибут.
+        if file.size > settings.MAX_FILE_SIZE_BYTES:
+            msg = f"Файл '{file.filename}' слишком большой ({file.size / 1024 / 1024:.2f} MB > {settings.MAX_FILE_SIZE_BYTES / 1024 / 1024:.2f} MB)."
+            logger.warning(f"{msg} (Клиент: {client_host})")
+            raise HTTPException(status_code=413, detail=msg)
+        
+        # Проверка MIME-типа файла
+        if file.content_type not in settings.ALLOWED_MIME_TYPES:
+            msg = f"Неподдерживаемый тип файла '{file.filename}' ({file.content_type}). Разрешены: {', '.join(settings.ALLOWED_MIME_TYPES)}."
+            logger.warning(f"{msg} (Клиент: {client_host})")
+            raise HTTPException(status_code=415, detail=msg) # 415 Unsupported Media Type
+            
+    # --- КОНЕЦ БЛОКА ВАЛИДАЦИИ ---
+
+    # Проверка доступности сервиса (бизнес-логика)
     if not task_manager.SERVICE_AVAILABLE:
         logger.error(f"Отклонен запрос от {client_host}: сервис недоступен из-за ошибки инициализации.")
         raise HTTPException(
@@ -52,8 +77,7 @@ async def create_task(
             detail="Сервис временно недоступен. Пожалуйста, попробуйте позже."
         )
     
-    # Делегируем всю работу сервисному слою.
-    # Любое непредвиденное исключение здесь будет поймано глобальным обработчиком.
+    # Делегируем всю работу сервисному слою
     task_id = await task_manager.create_processing_task(background_tasks, files)
     
     logger.info(f"Задача {task_id} успешно создана для клиента {client_host}.")
@@ -80,8 +104,6 @@ async def read_task_status(
     
     task_status = task_manager.get_task_status(task_id)
 
-    # Эта проверка также является частью бизнес-логики: мы явно сообщаем,
-    # что именно эта задача не найдена.
     if task_status is None:
         logger.warning(f"Запрошена несуществующая задача {task_id} от {client_host}.")
         raise HTTPException(status_code=404, detail=f"Задача с ID '{task_id}' не найдена.")

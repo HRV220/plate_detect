@@ -1,7 +1,7 @@
 # server/app/core/middleware.py
 
 import logging
-from typing import Callable # <--- ИМПОРТИРУЕМ Callable
+from typing import Callable
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -18,7 +18,7 @@ class MaxRequestSizeMiddleware(BaseHTTPMiddleware):
         self.max_size_bytes = max_size_bytes
 
     async def dispatch(
-        self, request: Request, call_next: Callable # <--- ИСПОЛЬЗУЕМ Callable
+        self, request: Request, call_next: Callable
     ):
         content_length_header = request.headers.get("content-length")
         
