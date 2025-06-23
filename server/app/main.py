@@ -1,3 +1,5 @@
+# server/app/main.py
+
 import logging
 from pathlib import Path
 
@@ -5,12 +7,13 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-# Импортируем наше новое middleware
 from app.core.middleware import MaxRequestSizeMiddleware
 from app.core.config import settings
 from app.core.logging_config import setup_logging
 from app.api.v1 import endpoints as api_v1_router
 from app.api.utils import endpoints as utils_router
+from app.core.processor import create_number_plate_coverer  # <-- ИЗМЕНЕНИЕ: Импортируем нашу фабрику
+from app import dependencies                            # <-- ИЗМЕНЕНИЕ: Импортируем новый модуль
 
 # 1. Настройка логирования
 setup_logging()
@@ -33,12 +36,8 @@ app = FastAPI(
 )
 
 # 4. НАСТРОЙКА MIDDLEWARE (Промежуточное ПО)
-# Это правильное место для добавления middleware - сразу после создания app.
-
-# Добавляем наше middleware для ограничения размера запроса
 app.add_middleware(
     MaxRequestSizeMiddleware,
-    # Конвертируем МБ из конфига в байты
     max_size_bytes=settings.MAX_REQUEST_SIZE_MB * 1024 * 1024 
 )
 
@@ -52,15 +51,23 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 # 5. События жизненного цикла
+# --- ИЗМЕНЕНИЕ: Событие startup теперь асинхронное, чтобы не блокировать запуск ---
 @app.on_event("startup")
-def on_startup():
+async def on_startup():
     logger.info("--- Сервис запускается ---")
     logger.info(f"Настройки: DEVICE={settings.PROCESSING_DEVICE}, MODEL={settings.MODEL_PATH}")
     try:
+        # Асинхронно инициализируем наш процессор и сохраняем его
+        # в общем модуле для зависимостей.
+        dependencies.coverer = await create_number_plate_coverer()
+        
+        # Создаем директорию для хранения задач (быстрая операция, можно оставить синхронной)
         Path(settings.TASKS_STORAGE_PATH).mkdir(parents=True, exist_ok=True)
         logger.info(f"Хранилище задач готово: {settings.TASKS_STORAGE_PATH}")
     except Exception:
-        logger.exception("КРИТИЧЕСКАЯ ОШИБКА: Не удалось создать директорию для хранения задач.")
+        logger.exception("КРИТИЧЕСКАЯ ОШИБКА: Не удалось инициализировать сервис или хранилище.")
+        # В случае ошибки `dependencies.coverer` останется None,
+        # и сервис будет корректно сообщать о своей недоступности.
 
 @app.on_event("shutdown")
 def on_shutdown():

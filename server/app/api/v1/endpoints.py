@@ -70,7 +70,7 @@ async def create_task(
     # --- КОНЕЦ БЛОКА ВАЛИДАЦИИ ---
 
     # Проверка доступности сервиса (бизнес-логика)
-    if not task_manager.SERVICE_AVAILABLE:
+    if not task_manager.is_service_available():
         logger.error(f"Отклонен запрос от {client_host}: сервис недоступен из-за ошибки инициализации.")
         raise HTTPException(
             status_code=503, 
