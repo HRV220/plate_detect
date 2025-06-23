@@ -1,9 +1,10 @@
-# main.py (версия с фоновой обработкой и URL)
+# main.py
 import cv2
 import numpy as np
 import uuid
 import os
 import shutil
+import torch
 from typing import List, Dict
 from pathlib import Path
 
@@ -12,12 +13,20 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+# Предполагаем, что processor.py находится в папке src
 from src.processor import NumberPlateCoverer
 
 # --- Конфигурация ---
 MODEL_PATH = "models/best.pt"
 COVER_IMAGE_PATH = "static/cover.png"
-DEVICE = "cuda"
+
+# Определяем устройство: используем CUDA, если доступно, иначе CPU.
+# Можно переопределить переменной окружения, например: PROCESSING_DEVICE=cpu
+DEFAULT_DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+DEVICE = os.getenv("PROCESSING_DEVICE", DEFAULT_DEVICE)
+
+# Размер батча для обработки. Можно вынести в переменные окружения.
+BATCH_SIZE = int(os.getenv("BATCH_SIZE", "8"))
 
 # --- Хранилище задач и файлов ---
 TASKS_STORAGE_PATH = Path("tasks_storage")
@@ -39,64 +48,105 @@ class TaskStatusResponse(BaseModel):
     results: List[ResultFile] = Field([], description="Список файлов с результатами (появляется после завершения).")
 
 # --- Инициализация FastAPI ---
-app = FastAPI(title="Асинхронный сервис обработки номеров")
+app = FastAPI(
+    title="Асинхронный сервис обработки номеров",
+    description="Сервис для наложения заглушек на автомобильные номера с использованием YOLOv8-OBB и пакетной обработки.",
+    version="2.0.0"
+)
 
 # Монтируем директорию с результатами как статическую
-# Теперь файлы из tasks_storage/ можно будет скачать по URL /results/
 app.mount("/results", StaticFiles(directory=TASKS_STORAGE_PATH), name="results")
 
 # Инициализация модели
 try:
+    print(f"Инициализация модели на устройстве: {DEVICE}")
     coverer = NumberPlateCoverer(model_path=MODEL_PATH, cover_image_path=COVER_IMAGE_PATH, device=DEVICE)
-except FileNotFoundError as e:
-    print(f"Критическая ошибка: {e}")
+except Exception as e:
+    print(f"Критическая ошибка при инициализации модели: {e}")
     coverer = None
 
-# --- Функция фоновой обработки ---
+# --- Функция фоновой обработки (с пакетной обработкой) ---
 def process_images_in_background(task_id: str, input_dir: Path, output_dir: Path):
-    """Эта функция будет выполняться в фоне."""
+    """
+    Эта функция выполняется в фоне и использует пакетную обработку.
+    """
     tasks_db[task_id]["status"] = "processing"
     print(f"Начата обработка задачи {task_id}...")
     
     results_list = []
     try:
-        for image_path in input_dir.glob("*"):
-            image = cv2.imread(str(image_path))
-            if image is None: continue
-
-            result_image = coverer.cover_plate(image)
-            
-            output_filename = f"covered_{image_path.name}"
-            output_filepath = output_dir / output_filename
-            cv2.imwrite(str(output_filepath), result_image)
-
-            results_list.append(ResultFile(
-                filename=output_filename,
-                url=f"/results/{task_id}/output/{output_filename}" # URL для скачивания
-            ).dict())
+        image_paths_list = list(input_dir.glob("*"))
         
+        # 1. Загружаем все изображения в список
+        images_to_process = []
+        valid_image_paths = []
+        for image_path in image_paths_list:
+            # Проверяем расширения, чтобы не пытаться читать не-изображения
+            if image_path.suffix.lower() in ['.jpg', '.jpeg', '.png']:
+                image = cv2.imread(str(image_path))
+                if image is not None:
+                    images_to_process.append(image)
+                    valid_image_paths.append(image_path)
+                else:
+                    print(f"Предупреждение: не удалось прочитать файл {image_path.name}")
+        
+        # 2. Если есть что обрабатывать, вызываем пакетный метод
+        if images_to_process:
+            print(f"Начинаю пакетную обработку {len(images_to_process)} изображений (batch_size={BATCH_SIZE})...")
+            processed_images = coverer.cover_plates_batch(images_to_process, batch_size=BATCH_SIZE)
+            print(f"Пакетная обработка для задачи {task_id} завершена.")
+
+            # 3. Сохраняем результаты
+            for i, result_image in enumerate(processed_images):
+                original_path = valid_image_paths[i]
+                output_filename = f"covered_{original_path.name}"
+                output_filepath = output_dir / output_filename
+                cv2.imwrite(str(output_filepath), result_image)
+
+                results_list.append(ResultFile(
+                    filename=output_filename,
+                    url=f"/results/{task_id}/output/{output_filename}"
+                ).dict())
+        else:
+            print(f"В задаче {task_id} не найдено подходящих изображений для обработки.")
+
         tasks_db[task_id]["status"] = "completed"
         tasks_db[task_id]["results"] = results_list
         print(f"Задача {task_id} успешно завершена.")
     
     except Exception as e:
         tasks_db[task_id]["status"] = "failed"
-        print(f"Ошибка при обработке задачи {task_id}: {e}")
+        # Логируем ошибку для дальнейшего анализа
+        print(f"Критическая ошибка при обработке задачи {task_id}: {e}")
     
     finally:
         # Очищаем временные входные файлы
-        shutil.rmtree(input_dir)
+        try:
+            shutil.rmtree(input_dir)
+            print(f"Временная папка {input_dir} для задачи {task_id} удалена.")
+        except OSError as e:
+            print(f"Ошибка при удалении временной папки {input_dir}: {e}")
 
 
 # --- Эндпоинты API ---
+@app.on_event("startup")
+async def startup_event():
+    if coverer is None:
+        print("ВНИМАНИЕ: Сервис запускается в нерабочем состоянии, модель не была загружена.")
+
+@app.get("/", summary="Проверка статуса сервиса")
+def read_root():
+    if coverer is None:
+        return {"status": "error", "message": "Сервис не смог инициализировать модель."}
+    return {"status": "ok", "message": f"Сервис запущен и работает на устройстве: {DEVICE}."}
+    
 @app.post("/process-task/", response_model=TaskResponse, status_code=202)
 async def create_processing_task(background_tasks: BackgroundTasks, files: List[UploadFile] = File(...)):
     if coverer is None:
-        raise HTTPException(status_code=503, detail="Сервис недоступен.")
+        raise HTTPException(status_code=503, detail="Сервис временно недоступен из-за ошибки инициализации модели.")
 
     task_id = str(uuid.uuid4())
     
-    # Создаем уникальные папки для задачи
     task_input_dir = TASKS_STORAGE_PATH / task_id / "input"
     task_output_dir = TASKS_STORAGE_PATH / task_id / "output"
     os.makedirs(task_input_dir, exist_ok=True)
@@ -104,14 +154,12 @@ async def create_processing_task(background_tasks: BackgroundTasks, files: List[
 
     # Сохраняем загруженные файлы на диск
     for file in files:
-        file_path = task_input_dir / file.filename
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+        if file.filename:
+            file_path = task_input_dir / Path(file.filename).name
+            with open(file_path, "wb") as buffer:
+                shutil.copyfileobj(file.file, buffer)
             
-    # Регистрируем задачу
     tasks_db[task_id] = {"status": "pending", "results": []}
-
-    # Добавляем задачу в фон
     background_tasks.add_task(process_images_in_background, task_id, task_input_dir, task_output_dir)
 
     return TaskResponse(task_id=task_id)
