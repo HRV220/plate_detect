@@ -1,11 +1,11 @@
-# server/app/api/utils/router.py
+# server/app/api/utils/endpoints.py
 
-from fastapi import APIRouter, FastAPI
+from fastapi import APIRouter
 from fastapi.responses import RedirectResponse
+# Импортируем специальные функции для генерации HTML документации
+from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
 
 router = APIRouter()
-# Используем временный экземпляр FastAPI для доступа к хелперам документации
-temp_app = FastAPI()
 
 @router.get("/", include_in_schema=False)
 async def root_redirect():
@@ -13,14 +13,14 @@ async def root_redirect():
     return RedirectResponse(url="/docs")
 
 @router.get("/docs", include_in_schema=False)
-async def get_swagger_ui_html():
+async def get_swagger_documentation():
     """Отдает HTML страницу для Swagger UI."""
-    return temp_app.swagger_ui_html(openapi_url="/openapi.json", title="API Docs - Swagger UI")
+    return get_swagger_ui_html(openapi_url="/openapi.json", title="API Docs - Swagger UI")
 
 @router.get("/redoc", include_in_schema=False)
-async def get_redoc_html():
+async def get_redoc_documentation():
     """Отдает HTML страницу для ReDoc."""
-    return temp_app.redoc_ui_html(openapi_url="/openapi.json", title="API Docs - ReDoc")
+    return get_redoc_html(openapi_url="/openapi.json", title="API Docs - ReDoc")
 
 @router.get("/health", tags=["Monitoring"])
 async def health_check():
