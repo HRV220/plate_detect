@@ -5,6 +5,8 @@ env/
 .env/
 
 # Папки с данными и результатами
+train/
+client/
 tasks_storage/
 test_images/  # Если не хочешь хранить тестовые картинки в репо
 test_results/

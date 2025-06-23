@@ -1,9 +1,13 @@
-# app/core/processor.py
+import logging
+import time
 import cv2
 import numpy as np
 from ultralytics import YOLO
 from typing import List
-from app.core.config import settings # <--- Импортируем настройки
+from app.core.config import settings
+
+# Создаем логгер для этого модуля
+logger = logging.getLogger(__name__)
 
 class NumberPlateCoverer:
     """
@@ -12,25 +16,29 @@ class NumberPlateCoverer:
     Поддерживает одиночную и пакетную обработку.
     """
     def __init__(self):
+        logger.info("Инициализация NumberPlateCoverer...")
         self.device = settings.PROCESSING_DEVICE
         self.model = YOLO(settings.MODEL_PATH)
         self.model.to(self.device)
-        print(f"Модель {settings.MODEL_PATH} загружена на устройство {self.device}.")
+        logger.info(f"Модель {settings.MODEL_PATH} загружена на устройство {self.device}.")
 
         self.cover_image = cv2.imread(settings.COVER_IMAGE_PATH, cv2.IMREAD_UNCHANGED)
         if self.cover_image is None:
+            logger.error(f"Не удалось загрузить заглушку: {settings.COVER_IMAGE_PATH}")
             raise FileNotFoundError(f"Не удалось загрузить заглушку: {settings.COVER_IMAGE_PATH}")
         
         if len(self.cover_image.shape) == 3 and self.cover_image.shape[2] == 4:
             self.has_alpha = True
         else:
             self.has_alpha = False
-            print("Предупреждение: Изображение-заглушка не имеет альфа-канала. Прозрачность может работать некорректно.")
+            logger.warning("Изображение-заглушка не имеет альфа-канала. Прозрачность может работать некорректно.")
 
-        print(f"Изображение-заглушка {settings.COVER_IMAGE_PATH} загружено.")
+        logger.info(f"Изображение-заглушка {settings.COVER_IMAGE_PATH} загружено.")
 
 
     def _get_destination_points(self, obb_box):
+        # Эта функция слишком низкоуровневая и быстрая для логирования.
+        # Оставляем ее без изменений.
         points = obb_box.xyxyxyxy[0].cpu().numpy().reshape(4, 2)
         rect = np.zeros((4, 2), dtype="float32")
         s = points.sum(axis=1)
@@ -49,6 +57,10 @@ class NumberPlateCoverer:
         
         if obb_results is None:
             return processed_image
+
+        num_detections = len(obb_results)
+        if num_detections > 0:
+            logger.debug(f"Наложение {num_detections} заглушек на изображение.")
 
         for box in obb_results:
             dest_points = self._get_destination_points(box)
@@ -83,27 +95,30 @@ class NumberPlateCoverer:
         """
         Одиночная обработка: Находит номера на изображении и накладывает заглушку.
         """
-        # Выполняем детекцию для одного изображения
+        logger.info("Запущена одиночная обработка изображения.")
+        start_time = time.time()
+
         results = self.model(image, device=self.device, verbose=False)
-        # res.obb может быть None, если ничего не найдено
         obb_results = results[0].obb 
         
-        return self._apply_cover_to_one_image(image, obb_results)
+        processed_image = self._apply_cover_to_one_image(image, obb_results)
+
+        end_time = time.time()
+        logger.info(f"Одиночная обработка завершена за {end_time - start_time:.4f} секунд.")
+        
+        return processed_image
         
     def cover_plates_batch(self, images: List[np.ndarray], batch_size: int = 16, imgsz: int = 640) -> List[np.ndarray]:
         """
         Пакетная обработка: Находит номера на списке изображений и накладывает заглушки.
-        
-        :param images: Список изображений в формате NumPy array (BGR).
-        :param batch_size: Размер батча для обработки моделью.
-        :param imgsz: Размер, до которого будут изменены изображения для детекции.
-        :return: Список обработанных изображений.
         """
         if not images:
             return []
 
-        # 1. Выполняем детекцию для всего списка изображений за один вызов
-        # Модель сама разделит их на батчи нужного размера.
+        num_images = len(images)
+        logger.info(f"Запущена пакетная обработка для {num_images} изображений с размером батча {batch_size}.")
+        start_time = time.time()
+
         results_batch = self.model(
             images, 
             device=self.device, 
@@ -114,13 +129,14 @@ class NumberPlateCoverer:
         
         processed_images = []
         
-        # 2. Итерируемся по оригинальным изображениям и их результатам
         for original_image, results in zip(images, results_batch):
-            # res.obb может быть None, если ничего не найдено на конкретном изображении
             obb_results = results.obb
-            
-            # 3. Применяем логику наложения для каждого изображения
             processed_image = self._apply_cover_to_one_image(original_image, obb_results)
             processed_images.append(processed_image)
             
+        end_time = time.time()
+        total_time = end_time - start_time
+        time_per_image = total_time / num_images if num_images > 0 else 0
+        logger.info(f"Пакетная обработка {num_images} изображений завершена за {total_time:.4f} секунд ({time_per_image:.4f} сек/изображение).")
+
         return processed_images
