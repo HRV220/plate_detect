@@ -24,11 +24,11 @@ def setup_logging():
             "console": {
                 "class": "logging.StreamHandler",
                 "formatter": "default",
-                "stream": "ext://sys.stdout",  # Вывод в стандартный поток вывода
+                "stream": "ext://sys.stdout",
             },
         },
         "root": {
-            "level": "INFO",  # Минимальный уровень логов для вывода
+            "level": "INFO",
             "handlers": ["console"],
         },
     }
