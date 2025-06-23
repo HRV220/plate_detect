@@ -8,7 +8,8 @@ class Settings(BaseSettings):
     MODEL_PATH: str = "models/best.pt"
     COVER_IMAGE_PATH: str = "static/cover.png"
     TASKS_STORAGE_PATH: str = "tasks_storage"
-    
+    MAX_REQUEST_SIZE_MB: int = 100 # По умолчанию 100 МБ
+
     # Настройки устройства для ML модели
     # Можно будет легко переключить на 'cuda' через переменную окружения в Docker
     PROCESSING_DEVICE: str = os.getenv("PROCESSING_DEVICE", "cpu")

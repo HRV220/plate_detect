@@ -1,5 +1,3 @@
-# server/app/main.py
-
 import logging
 from pathlib import Path
 
@@ -7,6 +5,8 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+# Импортируем наше новое middleware
+from app.core.middleware import MaxRequestSizeMiddleware
 from app.core.config import settings
 from app.core.logging_config import setup_logging
 from app.api.v1 import endpoints as api_v1_router
@@ -16,7 +16,7 @@ from app.api.utils import endpoints as utils_router
 setup_logging()
 logger = logging.getLogger(__name__)
 
-# 2. Определение метаданных (оставляем, это полезно)
+# 2. Определение метаданных
 tags_metadata = [
     {"name": "API V1", "description": "Основные эндпоинты для работы с задачами."},
     {"name": "Monitoring", "description": "Эндпоинты для проверки состояния сервиса."},
@@ -32,7 +32,17 @@ app = FastAPI(
     redoc_url=None
 )
 
-# 4. Глобальный обработчик исключений (оставляем, это важно для server-to-server)
+# 4. НАСТРОЙКА MIDDLEWARE (Промежуточное ПО)
+# Это правильное место для добавления middleware - сразу после создания app.
+
+# Добавляем наше middleware для ограничения размера запроса
+app.add_middleware(
+    MaxRequestSizeMiddleware,
+    # Конвертируем МБ из конфига в байты
+    max_size_bytes=settings.MAX_REQUEST_SIZE_MB * 1024 * 1024 
+)
+
+# Глобальный обработчик исключений
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     logger.exception(f"Необработанная ошибка: {request.method} {request.url}")
@@ -41,7 +51,7 @@ async def global_exception_handler(request: Request, exc: Exception):
         content={"detail": "Внутренняя ошибка сервера."},
     )
 
-# 5. События жизненного цикла (оставляем)
+# 5. События жизненного цикла
 @app.on_event("startup")
 def on_startup():
     logger.info("--- Сервис запускается ---")
