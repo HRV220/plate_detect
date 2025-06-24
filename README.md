@@ -242,7 +242,11 @@ curl -X GET "http://localhost:8000/api/v1/task-status/a1b2c3d4-e5f6-7890-1234-56
 Сервис можно настраивать через переменные окружения при запуске Docker-контейнера (-e КЛЮЧ=ЗНАЧЕНИЕ).
 
 переменная - описание - значение по умолчанию
-PROCESSING_DEVICE - Устройство для ML-модели (cpu или cuda) - cpu
-TASK_STORAGE_TTL_HOURS - Время жизни задач на диске (в часах) - 72
-MAX_FILES_PER_REQUEST - Макс. кол-во файлов в одном запросе - 50
-PROCESSING_BATCH_SIZE - Размер батча для обработки моделью - 16
+
+PROCESSING_DEVICE - Устройство для ML-модели (cpu или cuda) - cpu;
+
+TASK_STORAGE_TTL_HOURS - Время жизни задач на диске (в часах) - 72;
+
+MAX_FILES_PER_REQUEST - Макс. кол-во файлов в одном запросе - 50;
+
+PROCESSING_BATCH_SIZE - Размер батча для обработки моделью - 16;
