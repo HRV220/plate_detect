@@ -14,6 +14,8 @@ from app.api.v1 import endpoints as api_v1_router
 from app.api.utils import endpoints as utils_router
 from app.core.processor import create_number_plate_coverer  # <-- ИЗМЕНЕНИЕ: Импортируем нашу фабрику
 from app import dependencies                            # <-- ИЗМЕНЕНИЕ: Импортируем новый модуль
+from app.background import scheduler as app_scheduler # <-- ИЗМЕНЕНИЕ: импортируем наш новый модуль
+
 
 # 1. Настройка логирования
 setup_logging()
@@ -64,6 +66,8 @@ async def on_startup():
         # Создаем директорию для хранения задач (быстрая операция, можно оставить синхронной)
         Path(settings.TASKS_STORAGE_PATH).mkdir(parents=True, exist_ok=True)
         logger.info(f"Хранилище задач готово: {settings.TASKS_STORAGE_PATH}")
+        app_scheduler.initialize_scheduler()
+
     except Exception:
         logger.exception("КРИТИЧЕСКАЯ ОШИБКА: Не удалось инициализировать сервис или хранилище.")
         # В случае ошибки `dependencies.coverer` останется None,
@@ -72,7 +76,7 @@ async def on_startup():
 @app.on_event("shutdown")
 def on_shutdown():
     logger.info("--- Сервис останавливается ---")
-
+    app_scheduler.stop_scheduler()
 # 6. Подключение роутеров
 app.include_router(api_v1_router.router, prefix=settings.API_V1_STR, tags=["API V1"])
 app.include_router(utils_router.router)
