@@ -1,0 +1,43 @@
+# --- Web Framework & Server ---
+# Основной асинхронный веб-фреймворк
+fastapi
+
+# ASGI-сервер для запуска FastAPI в режиме разработки и внутри Gunicorn
+uvicorn[standard]
+
+# Продакшен-сервер WSGI/ASGI, управляющий рабочими процессами
+gunicorn
+
+# Необходим FastAPI для обработки multipart/form-data (загрузка файлов)
+python-multipart
+
+
+# --- Data Validation & Configuration ---
+# Для валидации данных и создания схем API
+pydantic
+
+# Для удобного управления настройками из переменных окружения и .env файлов
+pydantic-settings
+
+
+# --- Machine Learning & Image Processing ---
+# Основная библиотека для работы с моделью YOLOv8
+ultralytics
+
+# PyTorch (CPU-версия). Устанавливается отдельно в Dockerfile, но здесь указан для ясности.
+# torch
+# torchvision
+# torchaudio
+
+# Библиотека для всех операций с изображениями (чтение, запись, преобразования)
+# Версия без GUI-компонентов, идеальна для сервера.
+opencv-python-headless
+
+# Фундаментальная библиотека для научных вычислений, используется OpenCV и PyTorch
+numpy
+
+# Мощная библиотека для чтения/записи различных форматов изображений, включая WebP
+Pillow
+
+# Бибилиотека для очистки задач
+apscheduler
