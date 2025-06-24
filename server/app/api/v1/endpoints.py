@@ -1,112 +1,101 @@
 import logging
+import io
+from zipfile import ZipFile, ZIP_DEFLATED
 from typing import List
+from pathlib import Path
 
-from fastapi import (
-    APIRouter, 
-    File, 
-    UploadFile, 
-    HTTPException, 
-    BackgroundTasks, 
-    Path as FastAPIPath, 
-    Request
-)
+from fastapi import APIRouter, File, UploadFile, Request, HTTPException
+from fastapi.responses import StreamingResponse
+import numpy as np
+from PIL import Image, UnidentifiedImageError
+import cv2
 
-from app.api.v1 import schemas
-from app.services import task_manager
-from app.core.config import settings # <--- Импортируем наши настройки
+from app.core.config import settings
+from app import dependencies # Импортируем для доступа к 'coverer'
 
-# Создаем логгер для этого модуля
 logger = logging.getLogger(__name__)
-
 router = APIRouter()
 
 @router.post(
-    "/process-task/", 
-    response_model=schemas.TaskResponse, 
-    status_code=202,
-    summary="Создать задачу на обработку изображений"
+    "/process-images/", 
+    summary="Обработать изображения и вернуть ZIP-архив",
+    response_description="ZIP-архив с обработанными изображениями в формате JPEG.",
+    # Убираем response_model, так как возвращаем файл
 )
-async def create_task(
+async def process_images_in_memory(
     request: Request,
-    background_tasks: BackgroundTasks, 
-    files: List[UploadFile] = File(
-        ..., 
-        description="Список изображений (JPEG, PNG, WebP) для обработки."
-    )
+    files: List[UploadFile] = File(..., description="Изображения для обработки (JPEG, PNG, WebP).")
 ):
     """
-    Создает асинхронную задачу на обработку пачки изображений.
-
-    - **Принимает:** Список файлов.
-    - **Возвращает:** Мгновенный ответ с `task_id`.
-    - **В фоне:** Сохраняет файлы и запускает их обработку.
+    Принимает список изображений, обрабатывает их "на лету" в памяти
+    и возвращает ZIP-архив с результатами.
+    
+    Этот эндпоинт является синхронным с точки зрения клиента: он будет ждать,
+    пока все изображения не будут обработаны.
     """
-    client_host = request.client.host
-    logger.info(f"Получен запрос на создание задачи от {client_host} с {len(files)} файлами.")
+    client_host = request.client.host if request.client else "unknown"
+    logger.info(f"Получен запрос на обработку {len(files)} файлов от {client_host}.")
 
-    # --- НАЧАЛО БЛОКА ВАЛИДАЦИИ ВХОДНЫХ ДАННЫХ ---
+    if not dependencies.coverer:
+        raise HTTPException(status_code=503, detail="Сервис временно недоступен.")
 
-    # 1. Проверка общего количества файлов в запросе
+    # --- Валидация входных данных ---
     if len(files) > settings.MAX_FILES_PER_REQUEST:
-        msg = f"Превышен лимит на количество файлов в запросе ({len(files)} > {settings.MAX_FILES_PER_REQUEST})."
-        logger.warning(f"{msg} (Клиент: {client_host})")
-        raise HTTPException(status_code=413, detail=msg) # 413 Payload Too Large
+        raise HTTPException(status_code=413, detail=f"Слишком много файлов. Лимит: {settings.MAX_FILES_PER_REQUEST}.")
 
-    # 2. Проверка каждого файла индивидуально (размер и MIME-тип)
+    images_to_process = []
+    original_filenames = []
+
+    # 1. Чтение и валидация файлов в памяти
     for file in files:
-        # Проверка размера файла. file.size доступен после того, как файл начал читаться.
-        # FastAPI достаточно умен, чтобы предоставить этот атрибут.
         if file.size > settings.MAX_FILE_SIZE_BYTES:
-            msg = f"Файл '{file.filename}' слишком большой ({file.size / 1024 / 1024:.2f} MB > {settings.MAX_FILE_SIZE_BYTES / 1024 / 1024:.2f} MB)."
-            logger.warning(f"{msg} (Клиент: {client_host})")
-            raise HTTPException(status_code=413, detail=msg)
-        
-        # Проверка MIME-типа файла
+            raise HTTPException(status_code=413, detail=f"Файл '{file.filename}' слишком большой.")
         if file.content_type not in settings.ALLOWED_MIME_TYPES:
-            msg = f"Неподдерживаемый тип файла '{file.filename}' ({file.content_type}). Разрешены: {', '.join(settings.ALLOWED_MIME_TYPES)}."
-            logger.warning(f"{msg} (Клиент: {client_host})")
-            raise HTTPException(status_code=415, detail=msg) # 415 Unsupported Media Type
+            raise HTTPException(status_code=415, detail=f"Неподдерживаемый тип файла: '{file.filename}'.")
+        
+        try:
+            contents = await file.read()
+            pil_image = Image.open(io.BytesIO(contents))
+            if pil_image.mode != 'RGB':
+                pil_image = pil_image.convert('RGB')
             
-    # --- КОНЕЦ БЛОКА ВАЛИДАЦИИ ---
+            image_bgr = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
+            images_to_process.append(image_bgr)
+            original_filenames.append(Path(file.filename).stem)
+        except UnidentifiedImageError:
+            logger.warning(f"Файл {file.filename} от {client_host} не является изображением. Пропускаем.")
+        except Exception:
+            logger.exception(f"Ошибка при чтении файла {file.filename} от {client_host}.")
 
-    # Проверка доступности сервиса (бизнес-логика)
-    if not task_manager.is_service_available():
-        logger.error(f"Отклонен запрос от {client_host}: сервис недоступен из-за ошибки инициализации.")
-        raise HTTPException(
-            status_code=503, 
-            detail="Сервис временно недоступен. Пожалуйста, попробуйте позже."
-        )
-    
-    # Делегируем всю работу сервисному слою
-    task_id = await task_manager.create_processing_task(background_tasks, files)
-    
-    logger.info(f"Задача {task_id} успешно создана для клиента {client_host}.")
-    
-    return schemas.TaskResponse(task_id=task_id)
+    if not images_to_process:
+        raise HTTPException(status_code=400, detail="Не было предоставлено ни одного валидного изображения для обработки.")
 
+    # 2. Пакетная обработка в памяти
+    processed_images = dependencies.coverer.cover_plates_batch(
+        images_to_process, 
+        batch_size=settings.PROCESSING_BATCH_SIZE
+    )
 
-@router.get(
-    "/task-status/{task_id}", 
-    response_model=schemas.TaskStatusResponse,
-    summary="Получить статус задачи"
-)
-async def read_task_status(
-    request: Request,
-    task_id: str = FastAPIPath(..., description="ID задачи, полученный при её создании.")
-):
-    """
-    Получает текущий статус и результаты выполнения задачи.
+    # 3. Создание ZIP-архива в памяти
+    zip_buffer = io.BytesIO()
+    with ZipFile(zip_buffer, "w", ZIP_DEFLATED) as zip_file:
+        for i, image_array in enumerate(processed_images):
+            # Кодируем обработанное изображение в формат JPEG в памяти
+            success, image_bytes = cv2.imencode(".jpg", image_array, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+            if not success:
+                logger.error(f"Не удалось закодировать обработанный файл {original_filenames[i]}")
+                continue
+            
+            # Добавляем файл в zip-архив
+            filename = f"covered_{original_filenames[i]}.jpg"
+            zip_file.writestr(filename, image_bytes.tobytes())
 
-    Опрашивайте этот эндпоинт периодически, пока статус не станет `completed` или `failed`.
-    """
-    client_host = request.client.host
-    logger.info(f"Запрос статуса для задачи {task_id} от {client_host}.")
+    zip_buffer.seek(0)
     
-    task_status = task_manager.get_task_status(task_id)
+    logger.info(f"Обработка {len(files)} файлов для {client_host} завершена. Отправка ZIP-архива.")
 
-    if task_status is None:
-        logger.warning(f"Запрошена несуществующая задача {task_id} от {client_host}.")
-        raise HTTPException(status_code=404, detail=f"Задача с ID '{task_id}' не найдена.")
-    
-    logger.info(f"Отправлен статус '{task_status['status']}' для задачи {task_id}.")
-    return task_status
+    return StreamingResponse(
+        zip_buffer,
+        media_type="application/zip",
+        headers={"Content-Disposition": "attachment; filename=processed_images.zip"}
+    )
