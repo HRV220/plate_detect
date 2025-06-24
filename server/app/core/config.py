@@ -35,6 +35,9 @@ class Settings(BaseSettings):
     # директория будет автоматически удалена фоновой задачей.
     TASK_STORAGE_TTL_HOURS: int = 48 # 3 дня
 
+    REDIS_HOST: str = os.getenv("REDIS_HOST", "localhost")
+    REDIS_PORT: int = 6379
+
     class Config:
         case_sensitive = True
 

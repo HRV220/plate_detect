@@ -1,0 +1,25 @@
+# server/docker-compose.yml
+
+version: "3.8"
+
+services:
+  # Наш сервис с FastAPI
+  app:
+    build: . # Собирать образ из текущей директории (где лежит Dockerfile)
+    ports:
+      - "8000:8000" # Пробрасываем порт 8000 из контейнера на наш компьютер
+    environment:
+      - REDIS_HOST=redis # Передаем в приложение имя хоста Redis
+      - PROCESSING_DEVICE=${PROCESSING_DEVICE:-cpu} # Позволяет задать устройство извне
+    volumes:
+      # Монтируем папку для хранения результатов, чтобы они не терялись при перезапуске контейнера
+      - ./tasks_storage:/app/tasks_storage
+    depends_on:
+      - redis # Указываем, что наше приложение зависит от сервиса redis
+
+  # Сервис Redis
+  redis:
+    image: "redis:7-alpine" # Используем официальный легковесный образ Redis
+    ports:
+      - "6379:6379" # Пробрасываем порт для возможной отладки (не обязательно)
+    command: redis-server --save 60 1 --loglevel warning # Настройки Redis

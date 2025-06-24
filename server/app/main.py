@@ -2,6 +2,7 @@
 
 import logging
 from pathlib import Path
+import redis.asyncio as redis # Используем асинхронный клиент для Redis
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -12,9 +13,11 @@ from app.core.config import settings
 from app.core.logging_config import setup_logging
 from app.api.v1 import endpoints as api_v1_router
 from app.api.utils import endpoints as utils_router
-from app.core.processor import create_number_plate_coverer  # <-- ИЗМЕНЕНИЕ: Импортируем нашу фабрику
-from app import dependencies                            # <-- ИЗМЕНЕНИЕ: Импортируем новый модуль
-from app.background import scheduler as app_scheduler # <-- ИЗМЕНЕНИЕ: импортируем наш новый модуль
+from app.core.processor import create_number_plate_coverer
+from app import dependencies
+
+# --- УДАЛЕНО: Больше не нужен отдельный планировщик ---
+# from app.background import scheduler as app_scheduler
 
 
 # 1. Настройка логирования
@@ -30,17 +33,17 @@ tags_metadata = [
 # 3. Создание экземпляра FastAPI
 app = FastAPI(
     title="Сервис для анонимизации номерных знаков",
-    description="API для асинхронной обработки изображений.",
-    version="1.0.0",
+    description="API для асинхронной обработки изображений с использованием Redis для управления задачами.",
+    version="1.1.0", # Версию можно обновить, так как произошли существенные изменения
     openapi_tags=tags_metadata,
-    docs_url=None, 
+    docs_url=None,
     redoc_url=None
 )
 
 # 4. НАСТРОЙКА MIDDLEWARE (Промежуточное ПО)
 app.add_middleware(
     MaxRequestSizeMiddleware,
-    max_size_bytes=settings.MAX_REQUEST_SIZE_MB * 1024 * 1024 
+    max_size_bytes=settings.MAX_REQUEST_SIZE_MB * 1024 * 1024
 )
 
 # Глобальный обработчик исключений
@@ -53,35 +56,62 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 # 5. События жизненного цикла
-# --- ИЗМЕНЕНИЕ: Событие startup теперь асинхронное, чтобы не блокировать запуск ---
 @app.on_event("startup")
 async def on_startup():
+    """
+    Выполняется при запуске приложения.
+    Инициализирует подключение к Redis и загружает ML-модель.
+    """
     logger.info("--- Сервис запускается ---")
-    logger.info(f"Настройки: DEVICE={settings.PROCESSING_DEVICE}, MODEL={settings.MODEL_PATH}")
     try:
-        # Асинхронно инициализируем наш процессор и сохраняем его
-        # в общем модуле для зависимостей.
+        # --- ДОБАВЛЕНО: Инициализация клиента Redis ---
+        logger.info(f"Подключение к Redis по адресу {settings.REDIS_HOST}:{settings.REDIS_PORT}")
+        dependencies.redis_client = redis.Redis(
+            host=settings.REDIS_HOST,
+            port=settings.REDIS_PORT,
+            db=0,
+            decode_responses=True # Важно для получения строк, а не байтов
+        )
+        await dependencies.redis_client.ping() # Проверяем, что соединение установлено
+        logger.info("Успешно подключено к Redis.")
+
+        # Асинхронно инициализируем ML-процессор
+        logger.info(f"Загрузка модели '{settings.MODEL_PATH}' на устройство '{settings.PROCESSING_DEVICE}'...")
         dependencies.coverer = await create_number_plate_coverer()
-        
-        # Создаем директорию для хранения задач (быстрая операция, можно оставить синхронной)
+
+        # Создаем директорию для хранения результатов задач
         Path(settings.TASKS_STORAGE_PATH).mkdir(parents=True, exist_ok=True)
         logger.info(f"Хранилище задач готово: {settings.TASKS_STORAGE_PATH}")
-        app_scheduler.initialize_scheduler()
 
+        # --- УДАЛЕНО: Инициализация планировщика больше не нужна ---
+        # app_scheduler.initialize_scheduler()
+
+    except redis.exceptions.ConnectionError:
+        logger.exception("КРИТИЧЕСКАЯ ОШИБКА: Не удалось подключиться к Redis.")
+        # Сбрасываем зависимости, чтобы is_service_available() возвращал False
+        dependencies.redis_client = None
+        dependencies.coverer = None
     except Exception:
-        logger.exception("КРИТИЧЕСКАЯ ОШИБКА: Не удалось инициализировать сервис или хранилище.")
-        # В случае ошибки `dependencies.coverer` останется None,
-        # и сервис будет корректно сообщать о своей недоступности.
+        logger.exception("КРИТИЧЕСКАЯ ОШИБКА: Не удалось инициализировать сервис.")
+        dependencies.redis_client = None
+        dependencies.coverer = None
 
 @app.on_event("shutdown")
-def on_shutdown():
+async def on_shutdown(): # <-- Функция стала асинхронной
+    """
+    Выполняется при остановке приложения.
+    Корректно закрывает соединение с Redis.
+    """
     logger.info("--- Сервис останавливается ---")
-    app_scheduler.stop_scheduler()
+    if dependencies.redis_client:
+        await dependencies.redis_client.close()
+        logger.info("Соединение с Redis закрыто.")
+
 # 6. Подключение роутеров
 app.include_router(api_v1_router.router, prefix=settings.API_V1_STR, tags=["API V1"])
 app.include_router(utils_router.router)
 
-# 7. Монтирование статических файлов
+# 7. Монтирование статических файлов для раздачи результатов
 app.mount(
     f"/{settings.TASKS_STORAGE_PATH}",
     StaticFiles(directory=settings.TASKS_STORAGE_PATH, html=False),

@@ -10,8 +10,6 @@ anyio==4.9.0
     # via
     #   starlette
     #   watchfiles
-apscheduler==3.11.0
-    # via -r requirements.in
 certifi==2025.6.15
     # via requests
 charset-normalizer==3.4.2
@@ -104,6 +102,8 @@ pyyaml==6.0.2
     # via
     #   ultralytics
     #   uvicorn
+redis==6.2.0
+    # via -r requirements.in
 requests==2.32.4
     # via ultralytics
 scipy==1.16.0
@@ -131,11 +131,7 @@ typing-inspection==0.4.1
     #   pydantic
     #   pydantic-settings
 tzdata==2025.2
-    # via
-    #   pandas
-    #   tzlocal
-tzlocal==5.3.1
-    # via apscheduler
+    # via pandas
 ultralytics==8.3.158
     # via -r requirements.in
 ultralytics-thop==2.0.14
