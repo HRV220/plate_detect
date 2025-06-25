@@ -1,6 +1,6 @@
 # app/core/config.py
 import os
-from typing import List
+from typing import List, Optional # <-- Добавьте Optional
 from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
@@ -30,13 +30,20 @@ class Settings(BaseSettings):
     # Большие значения могут ускорить обработку на GPU, но требуют больше видеопамяти.
     PROCESSING_BATCH_SIZE: int = 16
 
-        # --- Настройки очистки ---
+    # --- Настройки очистки ---
     # Время жизни директории с задачей в часах. По истечении этого времени
     # директория будет автоматически удалена фоновой задачей.
     TASK_STORAGE_TTL_HOURS: int = 48 # 3 дня
 
     REDIS_HOST: str = os.getenv("REDIS_HOST", "localhost")
     REDIS_PORT: int = 6379
+
+    # URL для отправки JSON-уведомления о завершении задачи.
+    BACKEND_CALLBACK_URL: Optional[str] = os.getenv("BACKEND_CALLBACK_URL")
+
+    # URL на бэкенде, который будет принимать multipart/form-data запросы с файлами.
+    # Если эта переменная не установлена, файлы отправляться не будут.
+    BACKEND_UPLOAD_URL: Optional[str] = os.getenv("BACKEND_UPLOAD_URL")
 
     class Config:
         case_sensitive = True

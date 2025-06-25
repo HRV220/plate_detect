@@ -8,6 +8,9 @@ services:
     build: . # Собирать образ из текущей директории (где лежит Dockerfile)
     ports:
       - "8000:8000" # Пробрасываем порт 8000 из контейнера на наш компьютер
+
+    env_file: ./.env
+
     environment:
       - REDIS_HOST=redis # Передаем в приложение имя хоста Redis
       - PROCESSING_DEVICE=${PROCESSING_DEVICE:-cpu} # Позволяет задать устройство извне
