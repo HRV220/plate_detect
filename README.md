@@ -88,6 +88,8 @@ git clone https://github.com/HRV220/plate_detect.git
 cd plate_detect/server/
 ```
 
+Создайте файл .env
+
 2. Соберите Docker-образ:
    Эта команда прочитает Dockerfile и соберет самодостаточный образ приложения.
 
