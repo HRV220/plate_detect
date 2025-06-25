@@ -36,3 +36,5 @@ numpy
 Pillow
 
 redis
+
+apscheduler
